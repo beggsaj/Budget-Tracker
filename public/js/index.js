@@ -1,5 +1,20 @@
+import { openDB, deleteDB } from 'https://unpkg.com/idb?module'
+
+const dbName = 'budgetDB'
+const storeName = 'budgetStore'
+const version = 4
+
 let transactions = [];
 let myChart;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('../sw_cached_site.js')
+      .then(reg => console.log('Service Worker: Registered'))
+      .catch(err => console.log(`Service Worker: Error: ${err}`))
+  })
+}
 
 fetch("/api/transaction")
   .then(response => {
@@ -8,11 +23,54 @@ fetch("/api/transaction")
   .then(data => {
     // save db data on global variable
     transactions = data;
-
-    populateTotal();
-    populateTable();
-    populateChart();
+    pullIndexedDBData().then(() => {
+      populateTotal();
+      populateTable();
+      populateChart();
+    })
   });
+
+async function pullIndexedDBData() {
+  const db = await openDB(dbName, version, {
+    upgrade(db, oldVersion, newVersion, transaction) {
+      const store = db.createObjectStore(storeName, { keyPath: "id", autoIncrement: true })
+    }
+  })
+
+  const tx = db.transaction(storeName, 'readonly')
+  const items = await tx.objectStore(storeName).getAll()
+
+  //console.log(items)
+  items.map(item => {
+    //console.log(item)
+    transactions.unshift(item);
+  })
+  //console.log(transactions)
+
+  fetch("/api/transaction/bulk", {
+    method: "POST",
+    body: JSON.stringify(items),
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "Content-Type": "application/json"
+    }
+  })
+    .then(response => {
+      return response.json();
+    })
+    .then(data => {
+      console.log(data)
+      const txDel = db.transaction(storeName, 'readwrite')
+      const delStoreReq = txDel.objectStore(storeName)
+      .clear()
+      .then(() => {
+          console.log('data removed from indexedDB')
+        })
+    })
+    .catch(err => {
+      console.error(err)
+    });
+}
 
 function populateTotal() {
   // reduce transaction amounts to a single total value
@@ -29,6 +87,7 @@ function populateTable() {
   tbody.innerHTML = "";
 
   transactions.forEach(transaction => {
+    //console.log(transaction)
     // create and populate a table row
     let tr = document.createElement("tr");
     tr.innerHTML = `
@@ -66,14 +125,14 @@ function populateChart() {
 
   myChart = new Chart(ctx, {
     type: 'line',
-      data: {
-        labels,
-        datasets: [{
-            label: "Total Over Time",
-            fill: true,
-            backgroundColor: "#6666ff",
-            data
-        }]
+    data: {
+      labels,
+      datasets: [{
+        label: "Total Over Time",
+        fill: true,
+        backgroundColor: "#6666ff",
+        data
+      }]
     }
   });
 }
@@ -111,7 +170,7 @@ function sendTransaction(isAdding) {
   populateChart();
   populateTable();
   populateTotal();
-  
+
   // also send to server
   fetch("/api/transaction", {
     method: "POST",
@@ -121,33 +180,51 @@ function sendTransaction(isAdding) {
       "Content-Type": "application/json"
     }
   })
-  .then(response => {    
-    return response.json();
-  })
-  .then(data => {
-    if (data.errors) {
-      errorEl.textContent = "Missing Information";
-    }
-    else {
+    .then(response => {
+      return response.json();
+    })
+    .then(data => {
+      if (data.errors) {
+        errorEl.textContent = "Missing Information";
+      }
+      else {
+        // clear form
+        nameEl.value = "";
+        amountEl.value = "";
+      }
+    })
+    .catch(err => {
+      // fetch failed, so save in indexed db
+      saveRecord(transaction);
+
       // clear form
       nameEl.value = "";
       amountEl.value = "";
-    }
-  })
-  .catch(err => {
-    // fetch failed, so save in indexed db
-    saveRecord(transaction);
-
-    // clear form
-    nameEl.value = "";
-    amountEl.value = "";
-  });
+    });
 }
 
-document.querySelector("#add-btn").onclick = function() {
+async function saveRecord(transaction) {
+  console.log(transaction)
+
+  const db = await openDB(dbName, version, {
+    upgrade(db, oldVersion, newVersion, transaction) {
+      const store = db.createObjectStore(storeName, { keyPath: "id", autoIncrement: true })
+    }
+  })
+
+  const tx = db.transaction(storeName, 'readwrite')
+  const store = await tx.objectStore(storeName)
+
+  const value = await store.put(transaction)
+  await tx.done
+
+  console.log('Finished')
+}
+
+document.querySelector("#add-btn").onclick = function () {
   sendTransaction(true);
 };
 
-document.querySelector("#sub-btn").onclick = function() {
+document.querySelector("#sub-btn").onclick = function () {
   sendTransaction(false);
 };
