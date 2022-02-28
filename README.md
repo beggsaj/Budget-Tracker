@@ -1,4 +1,4 @@
-# Budget Tracker Starter Code
+# Budget Tracker 
 
 ## Purpose
 AS AN avid traveler
